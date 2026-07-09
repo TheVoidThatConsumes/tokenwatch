@@ -137,16 +137,3 @@ def scan_text(text):
     entropy_hits = [f for f in entropy_hits if f["line"] not in pattern_lines]
 
     return pattern_hits + entropy_hits
-
-
-if __name__ == "__main__":
-    # quick smoke test
-    sample = '''
-    aws_key = "AKIAABCDEFGHIJKLMNOP"
-    token = "ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8"
-    db = "postgresql://admin:hunter2@db.internal:5432/prod"
-    random_val = "xK9$mQ2#pL8vN4wR7tY1zA5bC3dE6fG0h"
-    normal_var = "hello_world"
-    '''
-    for f in scan_text(sample):
-        print(f["layer"], f["severity"], f["label"], f["match"], f"line {f['line']}")
