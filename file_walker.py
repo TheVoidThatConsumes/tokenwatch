@@ -33,6 +33,13 @@ BINARY_EXTENSIONS = {
 MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB — skip huge files, likely not source
 
 
+# Files we never scan — tokenwatch's own generated files
+DEFAULT_EXCLUDE_FILES = {
+    ".tokenwatch_state",   # our state file — contains hashes, not secrets
+    ".tokenwatchignore",   # our ignore file
+}
+
+
 def load_ignore_patterns(root):
     """Read .tokenwatchignore from project root, if present.
     One glob pattern per line, '#' comments allowed, blank lines skipped.
@@ -73,6 +80,8 @@ def iter_scannable_files(root):
             rel = fpath.relative_to(root)
 
             if fpath.suffix.lower() in BINARY_EXTENSIONS:
+                continue
+            if fname in DEFAULT_EXCLUDE_FILES:
                 continue
             if is_ignored(rel, ignore_patterns):
                 continue

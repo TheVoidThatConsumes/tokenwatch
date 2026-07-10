@@ -15,9 +15,7 @@ import subprocess
 from pathlib import Path
 
 from scanner_core import scan_text
-from file_walker import load_ignore_patterns, is_ignored, BINARY_EXTENSIONS
-
-MAX_BLOB_SIZE_BYTES = 5 * 1024 * 1024
+from file_walker import load_ignore_patterns, is_ignored, BINARY_EXTENSIONS, MAX_FILE_SIZE_BYTES
 
 
 def _run_git(args, cwd):
@@ -95,7 +93,7 @@ def scan_history(root):
 
     ignore_patterns = load_ignore_patterns(root)
     all_findings = []
-    seen_secrets = set()  # (redacted_match, label) — avoid reporting the
+    seen_secrets = set()  # (match, label, path) — avoid reporting the
                            # same secret in every single commit that touched
                            # the file it lives in; report first occurrence only
 
@@ -111,7 +109,7 @@ def scan_history(root):
             content = read_blob(root, sha, path)
             if content is None:
                 continue
-            if len(content.encode("utf-8", errors="ignore")) > MAX_BLOB_SIZE_BYTES:
+            if len(content.encode("utf-8", errors="ignore")) > MAX_FILE_SIZE_BYTES:
                 continue
 
             findings = scan_text(content)

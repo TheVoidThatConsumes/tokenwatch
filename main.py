@@ -6,14 +6,19 @@ Commands:
   report <path> [--history] same as scan, but also writes JSON to reports/
   init [--force]            generate the GitHub Actions workflow file
 
-Exit code 1 if any findings are present — makes this usable directly as
-a CI gate or pre-commit hook without extra wrapper scripts.
+Exit code 1 if any findings are present OR if workflow tampering is detected.
 
 On first run, scan automatically generates the GitHub Actions workflow
 if one doesn't already exist — no need to run init manually.
+
+Tamper detection: tokenwatch hashes its own workflow file at generation
+time and stores that hash in .tokenwatch_state. On every subsequent scan
+it recomputes the hash and checks that the run: line still calls
+scan . --history. Any deviation is flagged before the scan runs.
 """
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -21,6 +26,9 @@ from pathlib import Path
 
 from file_walker import scan_directory
 from history_walker import scan_history, is_git_repo
+
+STATE_FILE    = ".tokenwatch_state"
+REQUIRED_ARGS = "scan . --history"   # what the workflow run: line must contain
 
 
 WORKFLOW_TEMPLATE = """\
@@ -60,8 +68,7 @@ def find_repo_root(start):
 
 
 def detect_entrypoint(repo_root):
-    """Return the path to main.py relative to repo_root as a posix string.
-    Falls back to a sensible default with a warning if detection fails."""
+    """Return the path to main.py relative to repo_root as a posix string."""
     script_path = Path(__file__).resolve()
     try:
         return script_path.relative_to(repo_root).as_posix()
@@ -76,7 +83,39 @@ def detect_entrypoint(repo_root):
 
 
 # ---------------------------------------------------------------------------
-# Workflow generation — shared between auto-init and cmd_init
+# State file — persists workflow hash between runs
+# ---------------------------------------------------------------------------
+
+def state_path(repo_root):
+    return repo_root / STATE_FILE
+
+
+def load_state(repo_root):
+    sp = state_path(repo_root)
+    if not sp.exists():
+        return {}
+    try:
+        return json.loads(sp.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_state(repo_root, state):
+    state_path(repo_root).write_text(json.dumps(state, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Workflow hashing
+# ---------------------------------------------------------------------------
+
+def hash_file(path):
+    """SHA-256 hash of a file's contents."""
+    content = Path(path).read_text(errors="ignore")
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Workflow generation
 # ---------------------------------------------------------------------------
 
 def workflow_path(repo_root):
@@ -84,37 +123,40 @@ def workflow_path(repo_root):
 
 
 def generate_workflow(repo_root, entrypoint):
-    """Write the workflow file. Returns the path it was written to."""
+    """Write the workflow file, hash it, and save the hash to state."""
     wf_path = workflow_path(repo_root)
     wf_path.parent.mkdir(parents=True, exist_ok=True)
     wf_path.write_text(WORKFLOW_TEMPLATE.format(entrypoint=entrypoint))
+
+    # store the hash immediately so the next scan has a baseline to compare
+    state = load_state(repo_root)
+    state["workflow_hash"] = hash_file(wf_path)
+    state["entrypoint"]    = entrypoint
+    state["generated"]     = datetime.now(timezone.utc).isoformat()
+    save_state(repo_root, state)
+
     return wf_path
 
 
 def show_diff(existing_text, new_text):
-    """Print a simple line-level diff between existing and new workflow content."""
-    existing_lines = set(existing_text.splitlines())
-    new_lines      = set(new_text.splitlines())
-
-    removed = existing_lines - new_lines
-    added   = new_lines - existing_lines
-
+    existing_lines = existing_text.splitlines()
+    new_lines      = new_text.splitlines()
+    removed = [l for l in existing_lines if l not in set(new_lines)]
+    added   = [l for l in new_lines if l not in set(existing_lines)]
     if not removed and not added:
         print("  (no content changes)")
         return
-
-    for line in sorted(removed):
+    for line in removed:
         print(f"  - {line}")
-    for line in sorted(added):
+    for line in added:
         print(f"  + {line}")
 
 
 def auto_init(repo_root):
-    """Called automatically by scan/report on first run if no workflow exists.
-    Silent if the workflow already exists — only acts when there's nothing there."""
+    """Generate the workflow on first run. Silent if it already exists."""
     wf_path = workflow_path(repo_root)
     if wf_path.exists():
-        return  # already installed, nothing to do
+        return
 
     entrypoint = detect_entrypoint(repo_root)
     generate_workflow(repo_root, entrypoint)
@@ -127,6 +169,84 @@ def auto_init(repo_root):
 
 
 # ---------------------------------------------------------------------------
+# Tamper detection — called before every scan
+# ---------------------------------------------------------------------------
+
+def check_workflow_integrity(repo_root):
+    """Check the workflow file hasn't been modified since it was generated.
+
+    Two checks:
+      1. Hash — SHA-256 of the current file vs the stored hash. A mismatch
+         means the file content changed, regardless of what changed.
+      2. run: line — confirms the scan command hasn't been weakened. Even if
+         the hash somehow matched, this is a belt-and-suspenders check that
+         the actual command being run on CI is still the full --history scan.
+
+    Returns a list of tamper warning strings, empty if everything is clean.
+    """
+    wf_path  = workflow_path(repo_root)
+    warnings = []
+
+    if not wf_path.exists():
+        return []  # workflow doesn't exist yet — auto_init will handle it
+
+    # read once — used for both hash check and run: line check
+    content = wf_path.read_text(errors="ignore")
+    state   = load_state(repo_root)
+
+    # Check 1 — hash
+    stored_hash = state.get("workflow_hash")
+    if not stored_hash:
+        # State file missing or predates tamper detection — hash current file
+        # and save as baseline. Trust it this once.
+        state["workflow_hash"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        state["entrypoint"]    = detect_entrypoint(repo_root)
+        state["generated"]     = datetime.now(timezone.utc).isoformat()
+        save_state(repo_root, state)
+    else:
+        current_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if current_hash != stored_hash:
+            warnings.append(
+                f"workflow file hash mismatch — file may have been tampered with\n"
+                f"  stored : {stored_hash[:16]}...\n"
+                f"  current: {current_hash[:16]}..."
+            )
+
+    # Check 2 — run: line still contains the full scan command
+    run_lines = [
+        line.strip() for line in content.splitlines()
+        if line.strip().startswith("run:")
+    ]
+    if not run_lines:
+        warnings.append("workflow run: line is missing — the scan step may have been removed")
+    else:
+        for run_line in run_lines:
+            if REQUIRED_ARGS not in run_line:
+                warnings.append(
+                    f"workflow run: line has been modified and no longer calls '{REQUIRED_ARGS}'\n"
+                    f"  current: {run_line}"
+                )
+
+    return warnings
+
+
+def print_tamper_warnings(warnings):
+    """Print tamper warnings loudly so they're impossible to miss in CI logs."""
+    print("=" * 60, file=sys.stderr)
+    print("  TOKENWATCH — WORKFLOW TAMPER WARNING", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+    for w in warnings:
+        print(f"\n  {w}", file=sys.stderr)
+    print(
+        "\n  review .github/workflows/tokenwatch.yml and run "
+        "'init --force' to restore it if needed.",
+        file=sys.stderr,
+    )
+    print("=" * 60, file=sys.stderr)
+    print(file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Scan logic
 # ---------------------------------------------------------------------------
 
@@ -135,8 +255,6 @@ def run_scan(path, history):
     if history:
         if is_git_repo(path):
             history_findings = scan_history(path)
-            # Dedup: keep working-tree hit (no commit tag, more actionable)
-            # and drop the history duplicate for the same secret in the same file.
             working_tree_keys = {(f["match"], f["label"], f["file"]) for f in findings}
             history_findings = [
                 f for f in history_findings
@@ -152,7 +270,6 @@ def print_findings(findings, path):
     if not findings:
         print(f"tokenwatch: scanned {path} — clean, 0 findings")
         return
-
     print(f"tokenwatch: scanned {path} — {len(findings)} finding(s)\n")
     order = {"high": 0, "medium": 1, "low": 2}
     for f in sorted(findings, key=lambda x: order.get(x["severity"], 3)):
@@ -161,12 +278,11 @@ def print_findings(findings, path):
 
 
 def write_report(findings, path):
-    reports_dir = Path("reports")
+    scanned   = Path(path).resolve()
+    reports_dir = scanned / "reports"
     reports_dir.mkdir(exist_ok=True)
     timestamp    = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    project_name = Path(path).resolve().name
-    report_path  = reports_dir / f"{project_name}_{timestamp}.json"
-
+    report_path  = reports_dir / f"{scanned.name}_{timestamp}.json"
     report = {
         "tool":          "tokenwatch",
         "version":       "0.1.0",
@@ -185,23 +301,38 @@ def write_report(findings, path):
 
 def cmd_scan(args):
     repo_root = find_repo_root(Path.cwd())
+    tampered  = False
+
     if repo_root:
-        auto_init(repo_root)  # no-op if workflow already exists
+        auto_init(repo_root)
+        warnings = check_workflow_integrity(repo_root)
+        if warnings:
+            print_tamper_warnings(warnings)
+            tampered = True
 
     findings = run_scan(args.path, args.history)
     print_findings(findings, args.path)
-    return 1 if findings else 0
+
+    # exit 1 if findings OR if the workflow was tampered with —
+    # a weakened CI gate is itself a security concern
+    return 1 if (findings or tampered) else 0
 
 
 def cmd_report(args):
     repo_root = find_repo_root(Path.cwd())
+    tampered  = False
+
     if repo_root:
         auto_init(repo_root)
+        warnings = check_workflow_integrity(repo_root)
+        if warnings:
+            print_tamper_warnings(warnings)
+            tampered = True
 
     findings = run_scan(args.path, args.history)
     print_findings(findings, args.path)
     write_report(findings, args.path)
-    return 1 if findings else 0
+    return 1 if (findings or tampered) else 0
 
 
 def cmd_init(args):
@@ -210,15 +341,14 @@ def cmd_init(args):
         print("error: not inside a git repository — run 'git init' first", file=sys.stderr)
         return 1
 
-    entrypoint = detect_entrypoint(repo_root)
-    wf_path    = workflow_path(repo_root)
+    entrypoint  = detect_entrypoint(repo_root)
+    wf_path     = workflow_path(repo_root)
     new_content = WORKFLOW_TEMPLATE.format(entrypoint=entrypoint)
 
     if wf_path.exists():
         if not args.force:
             print(f"error: {wf_path} already exists — use --force to overwrite", file=sys.stderr)
             return 1
-        # --force: show a diff of what's changing before overwriting
         existing_content = wf_path.read_text()
         if existing_content == new_content:
             print(f"tokenwatch: {wf_path} is already up to date, nothing to do")
@@ -237,9 +367,81 @@ def cmd_init(args):
     return 0
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+def cmd_verify(args):
+    """Run a self-check to confirm tokenwatch is working correctly in this
+    environment. Tests both detection layers against known synthetic inputs
+    and reports pass/fail for each check.
+
+    Intended to be run once after copying tokenwatch into a new repo.
+    Uses only synthetic, non-functional credential strings — nothing real
+    is scanned and nothing is written to disk."""
+    from scanner_core import scan_text
+
+    CHECKS = [
+        # (description, sample_text, expected_label, expected_layer)
+        ("AWS Access Key ID detection",
+         'key = "AKIAABCDEFGHIJKLMNOP"',
+         "AWS Access Key ID", "pattern"),
+
+        ("GitHub PAT detection",
+         'token = "ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8"',
+         "GitHub Personal Access Token", "pattern"),
+
+        ("Database connection string detection",
+         'db = "postgresql://admin:hunter2@db.internal:5432/prod"',
+         "Database Connection String", "pattern"),
+
+        ("Entropy-based detection",
+         'val = "xK9mQ2pL8vN4wR7tY1zA5bC3dE6fG0hJj2kLm"',
+         "High-entropy string", "entropy"),
+
+        ("False positive suppression",
+         'normal = "hello_world"',
+         None, None),  # should produce zero findings
+    ]
+
+    print("tokenwatch — environment verification\n")
+    passed = 0
+    failed = 0
+
+    for description, sample, expected_label, expected_layer in CHECKS:
+        findings = scan_text(sample)
+
+        if expected_label is None:
+            # expect clean
+            if findings:
+                print(f"  FAIL  {description}")
+                print(f"        unexpected finding: {findings[0]['label']}")
+                failed += 1
+            else:
+                print(f"  PASS  {description}")
+                passed += 1
+        else:
+            match = next(
+                (f for f in findings if f["label"].startswith(expected_label)
+                 and f["layer"] == expected_layer),
+                None
+            )
+            if match:
+                print(f"  PASS  {description}")
+                passed += 1
+            else:
+                print(f"  FAIL  {description}")
+                print(f"        expected [{expected_layer}] '{expected_label}' — not detected")
+                failed += 1
+
+    print(f"\n{passed} passed, {failed} failed")
+
+    if failed:
+        print(
+            "\ntokenwatch may not work correctly in this environment. "
+            "Ensure you are running Python 3.9+ and all four files are present.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("\ntokenwatch is working correctly. run 'scan .' to get started.")
+    return 0
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -261,6 +463,9 @@ def build_parser():
     init_p = subparsers.add_parser("init", help="generate the GitHub Actions workflow file")
     init_p.add_argument("--force", action="store_true", help="overwrite existing workflow file")
     init_p.set_defaults(func=cmd_init)
+
+    verify_p = subparsers.add_parser("verify", help="confirm tokenwatch is working in this environment")
+    verify_p.set_defaults(func=cmd_verify)
 
     return parser
 
