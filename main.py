@@ -141,8 +141,8 @@ def generate_workflow(repo_root, entrypoint):
 def show_diff(existing_text, new_text):
     existing_lines = existing_text.splitlines()
     new_lines      = new_text.splitlines()
-    removed = [l for l in existing_lines if l not in set(new_lines)]
-    added   = [l for l in new_lines if l not in set(existing_lines)]
+    removed = [line for line in existing_lines if line not in set(new_lines)]
+    added   = [line for line in new_lines if line not in set(existing_lines)]
     if not removed and not added:
         print("  (no content changes)")
         return
@@ -442,6 +442,11 @@ def cmd_verify(args):
 
     print("\ntokenwatch is working correctly. run 'scan .' to get started.")
     return 0
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def build_parser():
     parser = argparse.ArgumentParser(

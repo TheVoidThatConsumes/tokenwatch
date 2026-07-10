@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 from scanner_core import scan_text
-from file_walker import load_ignore_patterns, is_ignored, BINARY_EXTENSIONS, MAX_FILE_SIZE_BYTES
+from file_walker import load_ignore_patterns, is_ignored, BINARY_EXTENSIONS, MAX_FILE_SIZE_BYTES, DEFAULT_EXCLUDE_FILES
 
 
 def _run_git(args, cwd):
@@ -102,6 +102,8 @@ def scan_history(root):
             fpath = Path(path)
 
             if fpath.suffix.lower() in BINARY_EXTENSIONS:
+                continue
+            if fpath.name in DEFAULT_EXCLUDE_FILES:
                 continue
             if is_ignored(fpath, ignore_patterns):
                 continue
