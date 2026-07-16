@@ -250,8 +250,25 @@ def print_tamper_warnings(warnings):
 # Scan logic
 # ---------------------------------------------------------------------------
 
+def is_suppressed(finding, scan_root):
+    """Return True if the source line carries a '# tokenwatch: ignore' comment.
+
+    Only applies to working-tree findings (no 'commit' key). History blobs
+    are immutable so suppression there is meaningless.
+    """
+    if "commit" in finding:
+        return False
+    try:
+        file_path = Path(scan_root) / finding["file"]
+        lines = file_path.read_text(errors="ignore").splitlines()
+        line_text = lines[finding["line"] - 1]  # finding["line"] is 1-indexed
+        return "# tokenwatch: ignore" in line_text
+    except (OSError, IndexError):
+        return False
+
+
 def run_scan(path, history):
-    findings = scan_directory(path)
+    findings = [f for f in scan_directory(path) if not is_suppressed(f, path)]
     if history:
         if is_git_repo(path):
             history_findings = scan_history(path)
@@ -381,19 +398,19 @@ def cmd_verify(args):
     CHECKS = [
         # (description, sample_text, expected_label, expected_layer)
         ("AWS Access Key ID detection",
-         'key = "AKIAABCDEFGHIJKLMNOP"',
+         'key = "AKIAABCDEFGHIJKLMNOP"  # tokenwatch: ignore',
          "AWS Access Key ID", "pattern"),
 
         ("GitHub PAT detection",
-         'token = "ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8"',
+         'token = "ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8"  # tokenwatch: ignore',
          "GitHub Personal Access Token", "pattern"),
 
         ("Database connection string detection",
-         'db = "postgresql://admin:hunter2@db.internal:5432/prod"',
+         'db = "postgresql://admin:hunter2@db.internal:5432/prod"  # tokenwatch: ignore',
          "Database Connection String", "pattern"),
 
         ("Entropy-based detection",
-         'val = "xK9mQ2pL8vN4wR7tY1zA5bC3dE6fG0hJj2kLm"',
+         'val = "xK9mQ2pL8vN4wR7tY1zA5bC3dE6fG0hJj2kLm"  # tokenwatch: ignore',
          "High-entropy string", "entropy"),
 
         ("False positive suppression",
