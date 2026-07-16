@@ -1,0 +1,18 @@
+# generated output
+reports/
+
+# tokenwatch runtime files
+.tokenwatch_state
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+
+# environments
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
