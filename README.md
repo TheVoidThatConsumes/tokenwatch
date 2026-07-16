@@ -2,9 +2,9 @@
 
 A local CLI that scans a repository for accidentally committed secrets — API keys, tokens, passwords, private keys, database connection strings — before they travel further than they should.
 
-Runs against the current working tree, the full git history, or both. Exits non-zero on any finding, so it drops straight into a CI pipeline or a pre-commit hook as a hard gate.
+Runs against the current working tree, the full git history, or both. Exits non-zero on any finding or if the CI workflow has been tampered with, so it drops straight into a pipeline or pre-commit hook as a hard gate.
 
-## Why
+## Why tokenwatch?
 
 Secrets leak into repositories constantly, usually by accident: a developer hardcodes an API key while debugging, commits it, pushes it. Deleting it from the latest commit doesn't remove it from git's history — the object database keeps every version of every file, and anyone with clone access can walk that history and find it. tokenwatch checks both the present and the past.
 
@@ -30,40 +30,82 @@ your-project/
     main.py
 ```
 
-(Any folder name works — `tools/tokenwatch/` is just a convention. The CLI figures out its own location automatically.)
+Any folder name works — `tools/tokenwatch/` is just a convention. The CLI figures out its own location automatically.
+
+## Getting started
+
+After copying the files in, verify the tool is working correctly in your environment:
+
+```bash
+python tools/tokenwatch/main.py verify
+```
+
+This runs both detection layers against synthetic inputs and confirms the false-positive suppression is working. If everything passes, you're ready to scan.
 
 ## Usage
 
-Scan the current working tree:
+**Verify the installation:**
+```bash
+python tools/tokenwatch/main.py verify
+```
+
+**Scan the working tree:**
 ```bash
 python tools/tokenwatch/main.py scan .
 ```
 
-Scan working tree **and** full git history — catches secrets that were committed and later deleted:
+**Scan working tree and full git history** — catches secrets that were committed and later deleted:
 ```bash
 python tools/tokenwatch/main.py scan . --history
 ```
 
-Same as `scan`, but also writes a timestamped JSON report to `reports/`:
+**Save a report** — same as scan but writes a timestamped JSON to `reports/` inside the scanned project:
 ```bash
 python tools/tokenwatch/main.py report . --history
 ```
 
-Check the exit code if scripting around it:
+**Check the exit code if scripting around it:**
 ```bash
 python tools/tokenwatch/main.py scan . --history
-echo $?   # 0 = clean, 1 = findings
+echo $?   # 0 = clean, 1 = findings or tamper warning
 ```
 
-## Generating the GitHub Actions workflow
+## GitHub Actions integration
+
+The first time you run `scan`, tokenwatch automatically generates `.github/workflows/tokenwatch.yml` if it doesn't already exist — no separate setup step needed. It detects its own location relative to your repo root and writes the correct path into the workflow.
+
+You'll see:
+```
+tokenwatch: no workflow found — generated .github/workflows/tokenwatch.yml
+  run: git add .github/workflows/tokenwatch.yml
+       git commit -m 'add tokenwatch CI workflow'
+       git push
+```
+
+Commit and push the generated file to activate the CI gate. Once active, the workflow runs `scan . --history` on every push and pull request.
+
+To regenerate or restore a workflow manually:
+```bash
+python tools/tokenwatch/main.py init           # generate if missing
+python tools/tokenwatch/main.py init --force   # overwrite existing (shows diff first)
+```
+
+`fetch-depth: 0` is set in the generated workflow and is required — without it, Actions performs a shallow clone and `--history` silently finds nothing.
+
+## Tamper detection
+
+tokenwatch hashes its own workflow file when it generates it and stores that hash in `.tokenwatch_state` at your repo root. On every subsequent scan it:
+
+1. Recomputes the hash and compares — any content change is flagged
+2. Checks the `run:` line still calls `scan . --history` — catches a weakened command even if the hash was manually updated to cover it
+
+A tamper warning is printed to stderr before the scan runs and causes the process to exit 1, the same as a real finding. To restore a tampered workflow:
 
 ```bash
-python tools/tokenwatch/main.py init
+python tools/tokenwatch/main.py init --force
 ```
 
-This detects tokenwatch's own location relative to your repo root and writes a correctly pathed `.github/workflows/tokenwatch.yml` — no manual editing needed regardless of which folder you put tokenwatch in. Won't overwrite an existing workflow unless you pass `--force`.
-
-Once committed and pushed, the workflow runs `scan . --history` on every push and pull request, using `fetch-depth: 0` to fetch full commit history (required — Actions does a shallow clone by default, which would make `--history` silently find nothing).
+Commit both `.tokenwatch_state` and the restored workflow file.
 
 ## Suppressing false positives
 
@@ -73,12 +115,20 @@ tests/*
 *.example
 fixtures/*
 ```
-Patterns match both the full relative path and the bare filename, so both path-based and extension-based rules work as expected. Note: patterns don't support `**` recursive matching — `tests/*` only matches files directly inside `tests/`, not nested subdirectories.
+
+Patterns match both the full relative path and the bare filename. Note: `**` recursive matching is not supported — `tests/*` only matches files directly inside `tests/`, not nested subdirectories.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Clean — no findings, workflow intact |
+| `1`  | Findings present, or workflow tamper detected |
 
 ## Scope
 
 tokenwatch deliberately does not:
-- Watch a repository live / continuously (no long-running process, no infrastructure)
+- Watch a repository live or continuously
 - Rotate or revoke leaked secrets automatically
 - Make any network calls — all analysis is local, reading only from the filesystem and the local `.git` directory
 

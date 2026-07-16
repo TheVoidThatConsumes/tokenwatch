@@ -6,8 +6,8 @@ Two independent signals, combined by the caller:
   2. entropy()  — Shannon entropy scoring for high-randomness strings
                   that don't match a known pattern
 
-Kept dependency-free (stdlib `re` + `math` only) so tokenwatch stays
-a single-file-friendly, pip-install-light CLI.
+Kept dependency-free (stdlib `re` + `math` only) so tokenwatch works
+as a zero-install, copy-paste-friendly CLI with no external dependencies.
 """
 
 import re
@@ -62,11 +62,10 @@ def scan_patterns(text):
     for label, pattern, severity in PATTERNS:
         for m in pattern.finditer(text):
             line_no = text.count("\n", 0, m.start()) + 1
-            snippet = m.group(0)
             findings.append({
                 "label": label,
                 "severity": severity,
-                "match": _redact(snippet),
+                "match": _redact(m.group(0)),
                 "line": line_no,
                 "layer": "pattern",
             })

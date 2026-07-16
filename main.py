@@ -199,12 +199,12 @@ def check_workflow_integrity(repo_root):
     if not stored_hash:
         # State file missing or predates tamper detection — hash current file
         # and save as baseline. Trust it this once.
-        state["workflow_hash"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        state["workflow_hash"] = hash_file(wf_path)
         state["entrypoint"]    = detect_entrypoint(repo_root)
         state["generated"]     = datetime.now(timezone.utc).isoformat()
         save_state(repo_root, state)
     else:
-        current_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        current_hash = hash_file(wf_path)
         if current_hash != stored_hash:
             warnings.append(
                 f"workflow file hash mismatch — file may have been tampered with\n"
@@ -278,16 +278,17 @@ def print_findings(findings, path):
 
 
 def write_report(findings, path):
-    scanned   = Path(path).resolve()
+    scanned     = Path(path).resolve()
     reports_dir = scanned / "reports"
     reports_dir.mkdir(exist_ok=True)
-    timestamp    = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    now          = datetime.now(timezone.utc)
+    timestamp    = now.strftime("%Y%m%d_%H%M%S")
     report_path  = reports_dir / f"{scanned.name}_{timestamp}.json"
     report = {
         "tool":          "tokenwatch",
         "version":       "0.1.0",
-        "scanned_path":  str(Path(path).resolve()),
-        "generated":     datetime.now(timezone.utc).isoformat(),
+        "scanned_path":  str(scanned),
+        "generated":     now.isoformat(),
         "finding_count": len(findings),
         "findings":      findings,
     }
