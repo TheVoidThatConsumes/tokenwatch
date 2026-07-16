@@ -6,20 +6,20 @@ Runs against the current working tree, the full git history, or both. Exits non-
 
 ## Why tokenwatch?
 
-Secrets leak into repositories constantly, usually by accident: a developer hardcodes an API key while debugging, commits it, pushes it. Deleting it from the latest commit doesn't remove it from git's history — the object database keeps every version of every file, and anyone with clone access can walk that history and find it. tokenwatch checks both the present and the past.
+Secrets leak into repositories constantly, usually by accident: a developer hardcodes an API key while debugging, then commits and pushes it. Deleting it from the latest commit doesn't remove it from git's history — the object database keeps every version of every file, and anyone with clone access can walk that history and find it. tokenwatch checks both the present and the past versions for these secrets.
 
 ## How it works
 
 Two independent detection layers, run together on every file:
 
 - **Pattern matching** — regex signatures for known secret formats: AWS access keys, GitHub tokens (`ghp_`, `ghs_`, `gho_`), JWT structure, PEM private key headers, database connection strings, Slack tokens, generic bearer tokens and API key assignments.
-- **Entropy scoring** — a secondary signal for high-randomness strings that don't match any known pattern. Real secrets tend to look statistically random; human-written config values don't. Catches secrets tokenwatch doesn't have a signature for yet.
+- **Entropy scoring** — a secondary signal for high-randomness strings that don't match any known pattern. Real secrets tend to look statistically random; human-written config values do not. It catches secrets tokenwatch doesn't have a signature for yet.
 
 Findings are redacted before they're ever stored or printed — only the first and last 4 characters of a matched secret are shown, the rest is masked.
 
 ## Install
 
-No dependencies beyond the Python standard library and `git` on PATH. Copy the four files into your project:
+There are no dependencies beyond the Python standard library and `git` on PATH. Copy the four files into your project:
 
 ```
 your-project/
@@ -94,7 +94,7 @@ python tools/tokenwatch/main.py init --force   # overwrite existing (shows diff 
 
 ## Tamper detection
 
-tokenwatch hashes its own workflow file when it generates it and stores that hash in `.tokenwatch_state` at your repo root. On every subsequent scan it:
+tokenwatch hashes its own workflow file when it generates it and stores that hash in `.tokenwatch_state` at your repo root. On every subsequent scan, it:
 
 1. Recomputes the hash and compares — any content change is flagged
 2. Checks the `run:` line still calls `scan . --history` — catches a weakened command even if the hash was manually updated to cover it
