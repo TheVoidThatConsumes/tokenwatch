@@ -12,8 +12,8 @@ Secrets leak into repositories constantly, usually by accident: a developer hard
 
 Two independent detection layers, run together on every file:
 
-- **Pattern matching** — regex signatures for known secret formats: AWS access keys, GitHub tokens (`ghp_`, `ghs_`, `gho_`), JWT structure, PEM private key headers, database connection strings, Slack tokens, generic bearer tokens and API key assignments.
-- **Entropy scoring** — a secondary signal for high-randomness strings that don't match any known pattern. Real secrets tend to look statistically random; human-written config values do not. It catches secrets tokenwatch doesn't have a signature for yet.
+- **Pattern matching** — regex signatures for known secret formats: AWS access keys, GitHub tokens (`ghp_`, `ghs_`, `gho_`), GitLab runner registration tokens (`GR1348`), JWT structure, PEM private key headers, database connection strings, Slack tokens, generic bearer tokens and API key assignments.
+- **Entropy scoring** — a secondary signal for high-randomness strings that don't match any known pattern (threshold: 4.5 bits/char). Real secrets tend to look statistically random; human-written config values do not. File and module paths are filtered out before scoring — they look random but aren't secrets. Catches secrets tokenwatch doesn't have a signature for yet.
 
 Findings are redacted before they're ever stored or printed — only the first and last 4 characters of a matched secret are shown, the rest is masked.
 
@@ -109,7 +109,16 @@ Commit both `.tokenwatch_state` and the restored workflow file.
 
 ## Suppressing false positives
 
-Add a `.tokenwatchignore` file at your project root — one glob pattern per line, `#` comments allowed:
+**Inline suppression** — append `# tokenwatch: ignore` to any line to exclude it from working-tree findings:
+
+```python
+key = "AKIAABCDEFGHIJKLMNOP"  # tokenwatch: ignore
+```
+
+Applies to working-tree scans only. Findings from `--history` cannot be suppressed inline — they exist in committed blobs that are immutable.
+
+**Ignore file** — add a `.tokenwatchignore` at your project root, one glob pattern per line, `#` comments allowed:
+
 ```
 tests/*
 *.example
@@ -117,6 +126,20 @@ fixtures/*
 ```
 
 Patterns match both the full relative path and the bare filename. Note: `**` recursive matching is not supported — `tests/*` only matches files directly inside `tests/`, not nested subdirectories.
+
+## What gets skipped
+
+tokenwatch automatically skips files and directories that produce noise rather than signal:
+
+**Directories:** `.git`, `node_modules`, `__pycache__`, `.venv`, `venv`, `dist`, `build`, `.tox`, `.mypy_cache`, `.pytest_cache`, `vendor`, `target`
+
+**Binary extensions:** image, audio, video, archive, compiled, and font formats — and database files (`.db`, `.sqlite`, `.sqlite3`)
+
+**Minified and bundled assets:** any filename containing `.min.`, `.bundle.`, `.chunk.`, `.dev.`, or `.prod.` (e.g. `vendor.bundle.dev.js`, `components.min.js`) — these are machine-generated and generate large volumes of entropy false positives from webpack chunk paths and sourcemap hashes
+
+**Binary content:** extensionless files are sniffed for null bytes and skipped if found — covers build cache blobs and compiled assets that have no extension
+
+**Oversized files:** anything over 5 MB
 
 ## Exit codes
 

@@ -53,6 +53,9 @@ PATTERNS = [
 
     ("Generic API Key Assignment",
      re.compile(r"(?i)\b(api[_-]?key|secret[_-]?key|access[_-]?token)\b\s*[=:]\s*['\"][A-Za-z0-9_\-]{16,}['\"]"), "medium"),
+
+    ("GitLab Runner Registration Token",
+     re.compile(r"\bGR1348[0-9A-Za-z_\-]{20}\b"), "high"),
 ]
 
 
@@ -85,7 +88,7 @@ def _redact(s, keep=4):
 # Catches secrets that don't match a known format — e.g. a freshly generated
 # API key from some internal service, or a random-looking config value.
 
-ENTROPY_THRESHOLD = 4.3          # bits/char — tune based on false-positive rate
+ENTROPY_THRESHOLD = 4.5          # bits/char — raised from 4.3 to cut path/hash FPs
 MIN_CANDIDATE_LEN = 20           # ignore short strings, too noisy
 MAX_CANDIDATE_LEN = 100          # secrets aren't usually huge blobs
 
@@ -93,6 +96,13 @@ MAX_CANDIDATE_LEN = 100          # secrets aren't usually huge blobs
 # long unbroken runs of alnum/symbols, typically inside quotes or after `=`/`:`
 CANDIDATE_RE = re.compile(
     r"""['"]([A-Za-z0-9+/=_\-\.]{%d,%d})['"]""" % (MIN_CANDIDATE_LEN, MAX_CANDIDATE_LEN)
+)
+
+# Candidates that look like file/module paths are almost never secrets.
+# Filter: starts with path prefix OR ends with a recognised file extension.
+_PATH_LIKE_RE = re.compile(
+    r"""^(?:[./\\])|\.(?:png|jpe?g|gif|svg|js|ts|jsx|tsx|css|vue|html?|woff2?)$""",
+    re.IGNORECASE,
 )
 
 
@@ -111,6 +121,8 @@ def scan_entropy(text):
     findings = []
     for m in CANDIDATE_RE.finditer(text):
         candidate = m.group(1)
+        if _PATH_LIKE_RE.search(candidate):
+            continue  # file/module path, not a secret
         score = shannon_entropy(candidate)
         if score >= ENTROPY_THRESHOLD:
             line_no = text.count("\n", 0, m.start()) + 1

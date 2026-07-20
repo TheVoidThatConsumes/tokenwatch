@@ -28,7 +28,13 @@ BINARY_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".tar",
     ".gz", ".exe", ".dll", ".so", ".dylib", ".woff", ".woff2", ".ttf",
     ".mp4", ".mp3", ".wav", ".bin", ".pyc", ".class", ".jar",
+    ".db", ".sqlite", ".sqlite3",  # database files — binary blobs, not source
 }
+
+# Substrings that identify minified/bundled JS and CSS — these files are
+# machine-generated, not authored, and generate huge volumes of entropy FPs
+# (webpack chunk paths, base64 alphabets, sourcemap hashes, etc.)
+MINIFIED_NAME_PATTERNS = {".min.", ".bundle.", ".chunk.", ".dev.", ".prod."}
 
 MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB — skip huge files, likely not source
 
@@ -38,6 +44,22 @@ DEFAULT_EXCLUDE_FILES = {
     ".tokenwatch_state",   # our state file — contains hashes, not secrets
     ".tokenwatchignore",   # our ignore file
 }
+
+
+def is_minified(fname):
+    """True for machine-generated JS/CSS bundles (*.min.js, *.bundle.dev.js, etc.).
+    Path.suffix only gives the last extension, so we check the full filename."""
+    lower = fname.lower()
+    return any(p in lower for p in MINIFIED_NAME_PATTERNS)
+
+
+def is_binary_content(fpath):
+    """Sniff the first 8 KB for null bytes — reliable binary detector for
+    extensionless files (e.g. CTFd filesystem cache blobs, compiled assets)."""
+    try:
+        return b"\x00" in fpath.read_bytes()[:8192]
+    except OSError:
+        return False
 
 
 def load_ignore_patterns(root):
@@ -81,6 +103,8 @@ def iter_scannable_files(root):
 
             if fpath.suffix.lower() in BINARY_EXTENSIONS:
                 continue
+            if is_minified(fname):
+                continue
             if fname in DEFAULT_EXCLUDE_FILES:
                 continue
             if is_ignored(rel, ignore_patterns):
@@ -90,6 +114,8 @@ def iter_scannable_files(root):
                     continue
             except OSError:
                 continue  # broken symlink etc.
+            if is_binary_content(fpath):
+                continue
 
             yield fpath
 
