@@ -20,6 +20,7 @@ DEFAULT_EXCLUDE_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv",
     "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
     "vendor", "target",  # rust/go build output
+    "reports",  # tokenwatch report output — skip self-scan
 }
 
 # Extensions we skip outright — binary formats where a "secret-looking
@@ -28,12 +29,9 @@ BINARY_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".tar",
     ".gz", ".exe", ".dll", ".so", ".dylib", ".woff", ".woff2", ".ttf",
     ".mp4", ".mp3", ".wav", ".bin", ".pyc", ".class", ".jar",
-    ".db", ".sqlite", ".sqlite3",  # database files — binary blobs, not source
+    ".db", ".sqlite", ".sqlite3",  # database files
 }
 
-# Substrings that identify minified/bundled JS and CSS — these files are
-# machine-generated, not authored, and generate huge volumes of entropy FPs
-# (webpack chunk paths, base64 alphabets, sourcemap hashes, etc.)
 MINIFIED_NAME_PATTERNS = {".min.", ".bundle.", ".chunk.", ".dev.", ".prod."}
 
 MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB — skip huge files, likely not source
@@ -43,19 +41,23 @@ MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB — skip huge files, likely not sou
 DEFAULT_EXCLUDE_FILES = {
     ".tokenwatch_state",   # our state file — contains hashes, not secrets
     ".tokenwatchignore",   # our ignore file
+    "package-lock.json",   # npm integrity hashes — not secrets
+    "yarn.lock",           # yarn integrity hashes
+    "poetry.lock",         # poetry integrity hashes
+    "Pipfile.lock",        # pipenv integrity hashes
 }
 
 
+
 def is_minified(fname):
-    """True for machine-generated JS/CSS bundles (*.min.js, *.bundle.dev.js, etc.).
-    Path.suffix only gives the last extension, so we check the full filename."""
+    """True for machine-generated JS/CSS bundles (*.min.js, *.bundle.dev.js, etc.)."""
     lower = fname.lower()
     return any(p in lower for p in MINIFIED_NAME_PATTERNS)
 
 
 def is_binary_content(fpath):
     """Sniff the first 8 KB for null bytes — reliable binary detector for
-    extensionless files (e.g. CTFd filesystem cache blobs, compiled assets)."""
+    extensionless files (e.g. build cache blobs, compiled assets)."""
     try:
         return b"\x00" in fpath.read_bytes()[:8192]
     except OSError:

@@ -88,7 +88,7 @@ def _redact(s, keep=4):
 # Catches secrets that don't match a known format — e.g. a freshly generated
 # API key from some internal service, or a random-looking config value.
 
-ENTROPY_THRESHOLD = 4.5          # bits/char — raised from 4.3 to cut path/hash FPs
+ENTROPY_THRESHOLD = 4.5          # bits/char — raised from 4.3 to cut hash/path FPs
 MIN_CANDIDATE_LEN = 20           # ignore short strings, too noisy
 MAX_CANDIDATE_LEN = 100          # secrets aren't usually huge blobs
 
@@ -98,13 +98,15 @@ CANDIDATE_RE = re.compile(
     r"""['"]([A-Za-z0-9+/=_\-\.]{%d,%d})['"]""" % (MIN_CANDIDATE_LEN, MAX_CANDIDATE_LEN)
 )
 
+
 # Candidates that look like file/module paths are almost never secrets.
-# Filter: starts with path prefix OR ends with a recognised file extension.
 _PATH_LIKE_RE = re.compile(
-    r"""^(?:[./\\])|\.(?:png|jpe?g|gif|svg|js|ts|jsx|tsx|css|vue|html?|woff2?)$""",
+    r"""^(?:[./\\])|\.(png|jpe?g|gif|svg|js|ts|jsx|tsx|css|vue|html?|woff2?)$""",
     re.IGNORECASE,
 )
 
+# npm/yarn/pip integrity hashes — sha1- and sha512- prefixed base64
+_INTEGRITY_HASH_RE = re.compile(r"^sha\d+-", re.IGNORECASE)
 
 def shannon_entropy(s):
     """Bits of entropy per character. Higher = more random-looking."""
@@ -123,6 +125,8 @@ def scan_entropy(text):
         candidate = m.group(1)
         if _PATH_LIKE_RE.search(candidate):
             continue  # file/module path, not a secret
+        if _INTEGRITY_HASH_RE.match(candidate):
+            continue  # SRI integrity hash, not a secret
         score = shannon_entropy(candidate)
         if score >= ENTROPY_THRESHOLD:
             line_no = text.count("\n", 0, m.start()) + 1
