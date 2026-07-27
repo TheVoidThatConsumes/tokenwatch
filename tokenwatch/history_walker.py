@@ -14,8 +14,12 @@ local .git directory.
 import subprocess
 from pathlib import Path
 
-from scanner_core import scan_text
-from file_walker import load_ignore_patterns, is_ignored, BINARY_EXTENSIONS, MAX_FILE_SIZE_BYTES, DEFAULT_EXCLUDE_FILES
+try:
+    from tokenwatch.scanner_core import scan_text
+    from tokenwatch.file_walker import load_ignore_patterns, is_ignored, BINARY_EXTENSIONS, MAX_FILE_SIZE_BYTES, DEFAULT_EXCLUDE_FILES
+except ImportError:
+    from scanner_core import scan_text
+    from file_walker import load_ignore_patterns, is_ignored, BINARY_EXTENSIONS, MAX_FILE_SIZE_BYTES, DEFAULT_EXCLUDE_FILES
 
 
 def _run_git(args, cwd):
@@ -116,7 +120,7 @@ def scan_history(root):
 
             findings = scan_text(content)
             for f in findings:
-                dedup_key = (f["match"], f["label"], path)
+                dedup_key = (f["match"], f["label"], Path(path).as_posix())
                 if dedup_key in seen_secrets:
                     continue
                 seen_secrets.add(dedup_key)

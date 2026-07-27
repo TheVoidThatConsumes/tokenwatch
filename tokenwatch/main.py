@@ -24,14 +24,49 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from file_walker import scan_directory
-from history_walker import scan_history, is_git_repo
+try:
+    from tokenwatch import __version__
+except ImportError:
+    __version__ = "unknown"
+
+try:
+    from tokenwatch.file_walker import scan_directory
+    from tokenwatch.history_walker import scan_history, is_git_repo
+except ImportError:
+    from file_walker import scan_directory
+    from history_walker import scan_history, is_git_repo
 
 STATE_FILE    = ".tokenwatch_state"
 REQUIRED_ARGS = "scan . --history"   # what the workflow run: line must contain
 
 
-WORKFLOW_TEMPLATE = """\
+# Workflow template for pip-installed tokenwatch (uses console script)
+WORKFLOW_TEMPLATE_PIP = """\
+name: tokenwatch
+
+on: [push, pull_request]
+
+jobs:
+  tokenwatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # full history — needed for --history scan
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install tokenwatch
+        run: pip install tokenwatch
+
+      - name: run tokenwatch
+        run: tokenwatch scan . --history
+"""
+
+# Workflow template for zip/copy layout (uses python <path>)
+WORKFLOW_TEMPLATE_ZIP = """\
 name: tokenwatch
 
 on: [push, pull_request]
@@ -67,19 +102,36 @@ def find_repo_root(start):
     return None
 
 
+def is_pip_installed():
+    """True if tokenwatch is installed as a package (regular or editable install).
+
+    Uses importlib.metadata rather than inspecting __file__ so it works
+    correctly for editable installs (where __file__ points into the source
+    tree, not site-packages) and in virtualenv configurations where
+    site.getsitepackages() is unavailable.
+    """
+    try:
+        from importlib.metadata import version as _version
+        _version("tokenwatch")
+        return True
+    except Exception:
+        return False
+
+
 def detect_entrypoint(repo_root):
-    """Return the path to main.py relative to repo_root as a posix string."""
+    """Return the path to main.py relative to repo_root as a posix string.
+    Only called in zip/copy layout — not used when pip-installed."""
     script_path = Path(__file__).resolve()
     try:
         return script_path.relative_to(repo_root).as_posix()
     except ValueError:
         print(
             "warning: could not determine tokenwatch's path inside the repo — "
-            "defaulting to 'tools/tokenwatch/main.py'. "
+            "defaulting to 'tokenwatch/main.py'. "
             "Edit the run: line in the generated workflow if that's wrong.",
             file=sys.stderr,
         )
-        return "tools/tokenwatch/main.py"
+        return "tokenwatch/main.py"
 
 
 # ---------------------------------------------------------------------------
@@ -122,16 +174,25 @@ def workflow_path(repo_root):
     return repo_root / ".github" / "workflows" / "tokenwatch.yml"
 
 
-def generate_workflow(repo_root, entrypoint):
+def build_workflow_content(repo_root):
+    """Return the correct workflow content for the current install layout."""
+    if is_pip_installed():
+        return WORKFLOW_TEMPLATE_PIP, None  # (content, entrypoint)
+    entrypoint = detect_entrypoint(repo_root)
+    return WORKFLOW_TEMPLATE_ZIP.format(entrypoint=entrypoint), entrypoint
+
+
+def generate_workflow(repo_root):
     """Write the workflow file, hash it, and save the hash to state."""
     wf_path = workflow_path(repo_root)
     wf_path.parent.mkdir(parents=True, exist_ok=True)
-    wf_path.write_text(WORKFLOW_TEMPLATE.format(entrypoint=entrypoint))
+    content, entrypoint = build_workflow_content(repo_root)
+    wf_path.write_text(content)
 
     # store the hash immediately so the next scan has a baseline to compare
     state = load_state(repo_root)
     state["workflow_hash"] = hash_file(wf_path)
-    state["entrypoint"]    = entrypoint
+    state["entrypoint"]    = entrypoint or "pip"
     state["generated"]     = datetime.now(timezone.utc).isoformat()
     save_state(repo_root, state)
 
@@ -139,17 +200,19 @@ def generate_workflow(repo_root, entrypoint):
 
 
 def show_diff(existing_text, new_text):
-    existing_lines = existing_text.splitlines()
-    new_lines      = new_text.splitlines()
-    removed = [line for line in existing_lines if line not in set(new_lines)]
-    added   = [line for line in new_lines if line not in set(existing_lines)]
-    if not removed and not added:
+    import difflib
+    existing_lines = existing_text.splitlines(keepends=True)
+    new_lines      = new_text.splitlines(keepends=True)
+    diff = list(difflib.unified_diff(
+        existing_lines, new_lines,
+        fromfile="existing", tofile="new",
+        lineterm="",
+    ))
+    if not diff:
         print("  (no content changes)")
         return
-    for line in removed:
-        print(f"  - {line}")
-    for line in added:
-        print(f"  + {line}")
+    for line in diff[2:]:  # skip --- / +++ header lines
+        print(f"  {line}")
 
 
 def auto_init(repo_root):
@@ -158,8 +221,7 @@ def auto_init(repo_root):
     if wf_path.exists():
         return
 
-    entrypoint = detect_entrypoint(repo_root)
-    generate_workflow(repo_root, entrypoint)
+    generate_workflow(repo_root)
 
     print(f"tokenwatch: no workflow found — generated {wf_path}")
     print(f"  run: git add {wf_path.relative_to(repo_root)}")
@@ -200,7 +262,7 @@ def check_workflow_integrity(repo_root):
         # State file missing or predates tamper detection — hash current file
         # and save as baseline. Trust it this once.
         state["workflow_hash"] = hash_file(wf_path)
-        state["entrypoint"]    = detect_entrypoint(repo_root)
+        state["entrypoint"]    = "pip" if is_pip_installed() else detect_entrypoint(repo_root)
         state["generated"]     = datetime.now(timezone.utc).isoformat()
         save_state(repo_root, state)
     else:
@@ -212,20 +274,21 @@ def check_workflow_integrity(repo_root):
                 f"  current: {current_hash[:16]}..."
             )
 
-    # Check 2 — run: line still contains the full scan command
+    # Check 2 — at least one run: line must still contain the full scan command.
+    # The pip template has two run: lines (pip install + tokenwatch scan) so we
+    # require ANY one of them to carry REQUIRED_ARGS, not all of them.
     run_lines = [
         line.strip() for line in content.splitlines()
         if line.strip().startswith("run:")
     ]
     if not run_lines:
         warnings.append("workflow run: line is missing — the scan step may have been removed")
-    else:
-        for run_line in run_lines:
-            if REQUIRED_ARGS not in run_line:
-                warnings.append(
-                    f"workflow run: line has been modified and no longer calls '{REQUIRED_ARGS}'\n"
-                    f"  current: {run_line}"
-                )
+    elif not any(REQUIRED_ARGS in rl for rl in run_lines):
+        warnings.append(
+            f"no workflow run: line calls '{REQUIRED_ARGS}' — "
+            f"the scan step may have been weakened or removed\n"
+            + "\n".join(f"  current: {rl}" for rl in run_lines)
+        )
 
     return warnings
 
@@ -303,7 +366,7 @@ def write_report(findings, path):
     report_path  = reports_dir / f"{scanned.name}_{timestamp}.json"
     report = {
         "tool":          "tokenwatch",
-        "version":       "0.1.0",
+        "version":       __version__,
         "scanned_path":  str(scanned),
         "generated":     now.isoformat(),
         "finding_count": len(findings),
@@ -359,9 +422,8 @@ def cmd_init(args):
         print("error: not inside a git repository — run 'git init' first", file=sys.stderr)
         return 1
 
-    entrypoint  = detect_entrypoint(repo_root)
     wf_path     = workflow_path(repo_root)
-    new_content = WORKFLOW_TEMPLATE.format(entrypoint=entrypoint)
+    new_content, entrypoint = build_workflow_content(repo_root)
 
     if wf_path.exists():
         if not args.force:
@@ -376,9 +438,12 @@ def cmd_init(args):
         show_diff(existing_content, new_content)
         print()
 
-    generate_workflow(repo_root, entrypoint)
+    generate_workflow(repo_root)
     print(f"tokenwatch: workflow written to {wf_path}")
-    print(f"  entrypoint : python {entrypoint} scan . --history")
+    if entrypoint:
+        print(f"  entrypoint : python {entrypoint} scan . --history")
+    else:
+        print(f"  entrypoint : tokenwatch scan . --history  (pip install)")
     print(f"  next steps : git add {wf_path.relative_to(repo_root)}")
     print(f"               git commit -m 'add tokenwatch CI workflow'")
     print(f"               git push")
@@ -393,7 +458,10 @@ def cmd_verify(args):
     Intended to be run once after copying tokenwatch into a new repo.
     Uses only synthetic, non-functional credential strings — nothing real
     is scanned and nothing is written to disk."""
-    from scanner_core import scan_text
+    try:
+        from tokenwatch.scanner_core import scan_text
+    except ImportError:
+        from scanner_core import scan_text
 
     CHECKS = [
         # (description, sample_text, expected_label, expected_layer)
