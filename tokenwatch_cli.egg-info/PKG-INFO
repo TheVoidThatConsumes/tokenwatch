@@ -1,3 +1,30 @@
+Metadata-Version: 2.4
+Name: tokenwatch-cli
+Version: 0.2.0
+Summary: Scan a repository for accidentally committed secrets
+Author: tokenwatch Contributors
+License-Expression: GPL-2.0-only
+Project-URL: Homepage, https://github.com/TheVoidThatConsumes/tokenwatch
+Project-URL: Source, https://github.com/TheVoidThatConsumes/tokenwatch
+Project-URL: Bug Tracker, https://github.com/TheVoidThatConsumes/tokenwatch/issues
+Keywords: security,secrets,credentials,git,scanning,devsecops
+Classifier: Development Status :: 4 - Beta
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Developers
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Security
+Classifier: Topic :: Software Development :: Quality Assurance
+Classifier: Topic :: Software Development :: Version Control :: Git
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: license-file
+
 # tokenwatch
 
 A local CLI that scans a repository for accidentally committed secrets — API keys, tokens, passwords, private keys, database connection strings — before they travel further than they should.
