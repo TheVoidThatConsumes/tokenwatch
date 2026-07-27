@@ -1,2 +1,0 @@
-[console_scripts]
-tokenwatch = tokenwatch.main:main
