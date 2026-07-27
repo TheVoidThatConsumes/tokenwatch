@@ -13,7 +13,10 @@ import os
 import fnmatch
 from pathlib import Path
 
-from scanner_core import scan_text
+try:
+    from tokenwatch.scanner_core import scan_text
+except ImportError:
+    from scanner_core import scan_text
 
 # Directories we never walk into — pure noise, huge, or binary-heavy
 DEFAULT_EXCLUDE_DIRS = {
