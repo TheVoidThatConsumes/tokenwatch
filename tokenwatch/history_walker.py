@@ -82,6 +82,41 @@ def read_blob(root, sha, path):
         return None  # e.g. path didn't exist at that rev (renames etc.)
 
 
+def is_shallow_clone(root):
+    out = _run_git(["rev-parse", "--is-shallow-repository"], cwd=root)
+    return out.strip() == "true"
+
+
+def shallow_coverage_gap_finding(root):
+    """A shallow clone silently truncates `git log --reverse` -- history
+    scanning returns fewer commits than actually exist upstream, with no
+    error and no warning by default. That's a real gap in what the scan
+    actually covered, not a footnote: a security tool that silently
+    under-scans is worse than one that errors loudly (see DECISIONS.md).
+    So this is emitted as a first-class finding, category
+    scan-coverage-gap, not a stderr-only warning that's easy to miss in a
+    CI log.
+    """
+    commit_count = len(list_commits(root))
+    return {
+        "label": "Shallow clone — history truncated",
+        "severity": "high",
+        "category": "scan-coverage-gap",
+        "file": ".",
+        "line": 1,
+        "match": None,
+        "layer": "coverage",
+        "description": (
+            f"This repository is a shallow clone; history scanning found only "
+            f"{commit_count} commit(s) and cannot see anything before the "
+            f"clone's truncation point. Any secret committed and later removed "
+            f"prior to that point will NOT be detected by --history. Full "
+            f"history is unavailable in this checkout — re-run against a full "
+            f"clone (`git fetch --unshallow`) for complete coverage."
+        ),
+    }
+
+
 def scan_history(root):
     """Scan every commit's changed files for secrets.
 
@@ -90,13 +125,20 @@ def scan_history(root):
     whether a credential needs rotating (if it only ever hit a local
     branch that was never pushed, urgency is lower than if it's sitting
     on origin/main).
+
+    If the repo is a shallow clone, a scan-coverage-gap finding is
+    prepended so the truncation is visible in the envelope itself, not
+    just a log line a CI run can silently swallow.
     """
     root = Path(root)
     if not is_git_repo(root):
         raise RuntimeError(f"{root} is not a git repository")
 
-    ignore_patterns = load_ignore_patterns(root)
     all_findings = []
+    if is_shallow_clone(root):
+        all_findings.append(shallow_coverage_gap_finding(root))
+
+    ignore_patterns = load_ignore_patterns(root)
     seen_secrets = set()  # (match, label, path) — avoid reporting the
                            # same secret in every single commit that touched
                            # the file it lives in; report first occurrence only

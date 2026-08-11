@@ -393,7 +393,10 @@ def cmd_scan(args):
     json_mode = getattr(args, "json", False)
     out       = sys.stderr if json_mode else sys.stdout
 
-    repo_root = find_repo_root(Path.cwd())
+    # anchored off the scanned path, not Path.cwd() -- aggregate.py invokes
+    # this with cwd=repo and args.path potentially pointing elsewhere, so
+    # cwd and the scan target are not guaranteed to be the same directory.
+    repo_root = find_repo_root(Path(args.path))
     tampered  = False
 
     if repo_root:
@@ -423,7 +426,8 @@ def cmd_scan(args):
 
 
 def cmd_report(args):
-    repo_root = find_repo_root(Path.cwd())
+    # same anchoring fix as cmd_scan -- see comment there.
+    repo_root = find_repo_root(Path(args.path))
     tampered  = False
 
     if repo_root:

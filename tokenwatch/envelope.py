@@ -50,6 +50,7 @@ LABEL_SUBTYPES = [
     ("Generic API Key Assignment", "GENERICKEY"),
     ("GitLab Runner Registration Token", "GITLAB"),
     ("High-entropy string", "ENTROPY"),
+    ("Shallow clone", "SHALLOW"),
 ]
 
 
@@ -74,18 +75,24 @@ def to_envelope_finding(f, subtype_counters):
     finding_id = f"TW-{subtype}-{subtype_counters[subtype]:03d}"
 
     severity = SEVERITY_MAP.get(f.get("severity", "").lower(), "MEDIUM")
+    category = f.get("category", CATEGORY)  # findings may override the
+                                             # default (e.g. scan-coverage-gap)
 
-    evidence_bits = [f"{f['layer']} match"] if f.get("layer") else []
+    evidence_bits = []
+    if f.get("layer") and f["layer"] != "coverage":
+        evidence_bits.append(f"{f['layer']} match")
     if "commit" in f:
         evidence_bits.append(f"found in commit {f['commit']}")
     evidence = "; ".join(evidence_bits) or None
 
+    description = f.get("description") or f"{f['label']} detected via {f.get('layer', 'pattern')} matching."
+
     envelope_finding = {
         "id": finding_id,
         "severity": severity,
-        "category": CATEGORY,
+        "category": category,
         "title": f["label"],
-        "description": f"{f['label']} detected via {f.get('layer', 'pattern')} matching.",
+        "description": description,
         "location": _location(f),
     }
     if evidence:
