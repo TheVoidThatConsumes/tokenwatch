@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tokenwatch-cli"
-version = "0.3.0"
+version = "0.4.0"
 description = "Scan a repository for accidentally committed secrets"
 readme = {file = "README.md", content-type = "text/markdown"}
-license = "GPL-2.0-only"
+license = "Apache-2.0"
 requires-python = ">=3.9"
 keywords = ["security", "secrets", "credentials", "git", "scanning", "devsecops"]
 authors = [
