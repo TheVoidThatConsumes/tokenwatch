@@ -36,6 +36,11 @@ except ImportError:
     from file_walker import scan_directory
     from history_walker import scan_history, is_git_repo
 
+try:
+    from tokenwatch.envelope import build_envelope
+except ImportError:
+    from envelope import build_envelope
+
 STATE_FILE    = ".tokenwatch_state"
 REQUIRED_ARGS = "scan . --history"   # what the workflow run: line must contain
 
@@ -215,19 +220,23 @@ def show_diff(existing_text, new_text):
         print(f"  {line}")
 
 
-def auto_init(repo_root):
-    """Generate the workflow on first run. Silent if it already exists."""
+def auto_init(repo_root, out=sys.stdout):
+    """Generate the workflow on first run. Silent if it already exists.
+
+    `out` is stderr when --json is active, so this notice never lands on
+    stdout and corrupts the envelope aggregate.py expects to parse there.
+    """
     wf_path = workflow_path(repo_root)
     if wf_path.exists():
         return
 
     generate_workflow(repo_root)
 
-    print(f"tokenwatch: no workflow found — generated {wf_path}")
-    print(f"  run: git add {wf_path.relative_to(repo_root)}")
-    print(f"       git commit -m 'add tokenwatch CI workflow'")
-    print(f"       git push")
-    print()
+    print(f"tokenwatch: no workflow found — generated {wf_path}", file=out)
+    print(f"  run: git add {wf_path.relative_to(repo_root)}", file=out)
+    print(f"       git commit -m 'add tokenwatch CI workflow'", file=out)
+    print(f"       git push", file=out)
+    print(file=out)
 
 
 # ---------------------------------------------------------------------------
@@ -346,15 +355,15 @@ def run_scan(path, history):
     return findings
 
 
-def print_findings(findings, path):
+def print_findings(findings, path, out=sys.stdout):
     if not findings:
-        print(f"tokenwatch: scanned {path} — clean, 0 findings")
+        print(f"tokenwatch: scanned {path} — clean, 0 findings", file=out)
         return
-    print(f"tokenwatch: scanned {path} — {len(findings)} finding(s)\n")
+    print(f"tokenwatch: scanned {path} — {len(findings)} finding(s)\n", file=out)
     order = {"high": 0, "medium": 1, "low": 2}
     for f in sorted(findings, key=lambda x: order.get(x["severity"], 3)):
         commit_tag = f" [{f['commit']}]" if "commit" in f else ""
-        print(f"  {f['severity'].upper():6} {f['file']}:{f['line']}{commit_tag}  {f['label']}  {f['match']}")
+        print(f"  {f['severity'].upper():6} {f['file']}:{f['line']}{commit_tag}  {f['label']}  {f['match']}", file=out)
 
 
 def write_report(findings, path):
@@ -381,18 +390,32 @@ def write_report(findings, path):
 # ---------------------------------------------------------------------------
 
 def cmd_scan(args):
+    json_mode = getattr(args, "json", False)
+    out       = sys.stderr if json_mode else sys.stdout
+
     repo_root = find_repo_root(Path.cwd())
     tampered  = False
 
     if repo_root:
-        auto_init(repo_root)
+        auto_init(repo_root, out=out)
         warnings = check_workflow_integrity(repo_root)
         if warnings:
-            print_tamper_warnings(warnings)
+            print_tamper_warnings(warnings)  # already stderr-only
             tampered = True
 
     findings = run_scan(args.path, args.history)
-    print_findings(findings, args.path)
+
+    if json_mode:
+        # stdout carries ONLY the JSON envelope — this is the contract
+        # aggregate.py's json.loads(proc.stdout) depends on.
+        envelope = build_envelope(findings, args.path)
+        if tampered:
+            # not a schema field; surfaced via stderr only, same as the
+            # tamper warning itself, so it can't corrupt the envelope.
+            print("tokenwatch: workflow tamper detected (see stderr warning above)", file=sys.stderr)
+        print(json.dumps(envelope, indent=2))
+    else:
+        print_findings(findings, args.path, out=out)
 
     # exit 1 if findings OR if the workflow was tampered with —
     # a weakened CI gate is itself a security concern
@@ -544,6 +567,9 @@ def build_parser():
     scan_p = subparsers.add_parser("scan", help="scan working tree (optionally + git history)")
     scan_p.add_argument("path", nargs="?", default=".", help="project directory (default: current dir)")
     scan_p.add_argument("--history", action="store_true", help="also scan full git history")
+    scan_p.add_argument("--json", action="store_true",
+                         help="emit the shared Gossamer finding-envelope JSON to stdout only "
+                              "(all other output moves to stderr)")
     scan_p.set_defaults(func=cmd_scan)
 
     report_p = subparsers.add_parser("report", help="scan and export findings to reports/")
