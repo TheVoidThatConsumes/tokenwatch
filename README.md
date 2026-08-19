@@ -22,19 +22,21 @@ Findings are redacted before they're ever stored or printed — only the first a
 **pip (recommended):**
 
 ```
-pip install tokenwatch
+pip install tokenwatch-cli
 ```
 
 **zip (no install, copy into project):**
 
-Download the zip and extract the `tokenwatch/` folder anywhere inside your project. No dependencies beyond the Python standard library and `git` on PATH.
+Download the repository zip (GitHub → Code → Download ZIP) and extract the `tokenwatch/` folder anywhere inside your project. No dependencies beyond the Python standard library and `git` on PATH.
 
 ```
 your-project/
   tokenwatch/
+    __init__.py
     scanner_core.py
     file_walker.py
     history_walker.py
+    envelope.py
     main.py
 ```
 
@@ -112,7 +114,7 @@ Commit and push the generated file to activate the CI gate. Once active, the wor
 
 The generated workflow differs by install method. The pip layout installs tokenwatch via pip in CI and calls the console script directly. The zip layout calls the script by path. Both are generated automatically — no manual editing needed.
 
-`fetch-depth: 0` is set in the generated workflow and is required — without it, Actions performs a shallow clone and `--history` silently finds nothing.
+`fetch-depth: 0` is set in the generated workflow and is required — without it, Actions performs a shallow clone, `--history` can only see commits after the clone's truncation point, and the scan emits a `scan-coverage-gap` finding (first-class, exit 1) instead of silently under-scanning. Full history (`git fetch --unshallow`) restores complete coverage.
 
 To regenerate or restore a workflow manually:
 
@@ -189,4 +191,4 @@ tokenwatch deliberately does not:
 
 ## License
 
-GPLv2 — see LICENSE.
+Apache License 2.0 — see [LICENSE](LICENSE).
