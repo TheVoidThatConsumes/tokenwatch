@@ -55,16 +55,18 @@ jobs:
   tokenwatch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # action tags are mutable — pin the commit SHA (v4 line)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0        # full history — needed for --history scan
 
-      - uses: actions/setup-python@v5
+      # action tags are mutable — pin the commit SHA (v5 line)
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
 
       - name: install tokenwatch
-        run: pip install tokenwatch
+        run: pip install tokenwatch-cli
 
       - name: run tokenwatch
         run: tokenwatch scan . --history
@@ -80,11 +82,13 @@ jobs:
   tokenwatch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # action tags are mutable — pin the commit SHA (v4 line)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0        # full history — needed for --history scan
 
-      - uses: actions/setup-python@v5
+      # action tags are mutable — pin the commit SHA (v5 line)
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
 
@@ -117,7 +121,10 @@ def is_pip_installed():
     """
     try:
         from importlib.metadata import version as _version
-        _version("tokenwatch")
+        # The distribution is published as tokenwatch-cli (pyproject `name`).
+        # Querying "tokenwatch" would never match and would misreport the
+        # pip layout as zip/copy, generating the wrong workflow.
+        _version("tokenwatch-cli")
         return True
     except Exception:
         return False
@@ -413,8 +420,10 @@ def cmd_scan(args):
         # aggregate.py's json.loads(proc.stdout) depends on.
         envelope = build_envelope(findings, args.path)
         if tampered:
-            # not a schema field; surfaced via stderr only, same as the
-            # tamper warning itself, so it can't corrupt the envelope.
+            # surfaced via stderr as well, but the envelope must carry it
+            # too — gossamer's aggregate() forwards envelope warnings into
+            # the suite report, which is the only place CI humans see it.
+            envelope["warnings"] = ["workflow tamper detected"]
             print("tokenwatch: workflow tamper detected (see stderr warning above)", file=sys.stderr)
         print(json.dumps(envelope, indent=2))
     else:
